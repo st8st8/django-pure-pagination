@@ -211,3 +211,66 @@ class Page(object):
                              # Use same naming conventions as Django
             })
 
+
+class MongoFindPaginator(Paginator):
+    def __init__(self, collection, query, per_page, orphans=0, allow_empty_first_page=True, request=None):
+        #Object list makes no sense here, so we'll replace it when needed
+        super(MongoFindPaginator, self).__init__(collection, per_page, orphans, allow_empty_first_page, request)
+        self.collection = collection
+        self.query = query
+
+    def _get_count(self):
+        #Mongo
+        return self.collection.find(self.query).count()
+    count = property(_get_count)
+
+    def page(self, number):
+        "Returns a Page object for the given 1-based page number."
+        number = self.validate_number(number)
+        bottom = (number - 1) * self.per_page
+        top = bottom + self.per_page
+        if top + self.orphans >= self.count:
+            top = self.count
+        return MongoFindPage(list(self.collection.find(self.query).skip(bottom).limit(top-bottom)), number, self)
+
+class MongoFindPage(Page):
+    pass
+
+
+class MongoAggregationPaginator(Paginator):
+    def __init__(self, collection, query, per_page, orphans=0, allow_empty_first_page=True, request=None):
+        #Object list makes no sense here, so we'll replace it when needed
+        super(MongoAggregationPaginator, self).__init__(collection, per_page, orphans, allow_empty_first_page, request)
+        self.collection = collection
+        self.query = query
+
+    def _get_count(self):
+        #Mongo
+        query = list(self.query)
+        query.append({"$group": { "_id": "_id", "count": {"$sum": 1}}})
+        ret = self.collection.aggregate(query)
+        if ret["result"]:
+            return ret["result"][0]["count"]
+        else:
+            return 0
+    count = property(_get_count)
+
+
+    def page(self, number):
+        "Returns a Page object for the given 1-based page number."
+        number = self.validate_number(number)
+        bottom = (number - 1) * self.per_page
+        top = bottom + self.per_page
+        if top + self.orphans >= self.count:
+            top = self.count
+        query = list(self.query)
+        query.append({"$skip": bottom})
+        query.append({"$limit": top-bottom})
+        try:
+            res = self.collection.aggregate(query)
+            return MongoAggregatePage(res["result"], number, self)
+        except Exception as e:
+            return MongoAggregatePage([], 0, self)
+
+class MongoAggregatePage(Page):
+    pass
